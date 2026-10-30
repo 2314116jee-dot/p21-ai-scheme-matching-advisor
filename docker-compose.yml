@@ -1,0 +1,19 @@
+# docker-compose.yml - Optional PostgreSQL Container
+# Use this if you prefer running PostgreSQL via Docker instead of native Windows service.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: p21-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: p21
+      POSTGRES_USER: p21_user
+      POSTGRES_PASSWORD: p21_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - p21_pgdata:/var/lib/postgresql/data
+
+volumes:
+  p21_pgdata:

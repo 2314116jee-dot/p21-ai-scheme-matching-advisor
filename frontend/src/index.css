@@ -1,0 +1,162 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-base: #fcfbf9;
+    --bg-surface: #ffffff;
+    --bg-subtle: #f5f4ef;
+    --text-main: #18191b;
+    --text-muted: #57595e;
+    --text-faint: #8a8d94;
+    --border-main: #e2e1dc;
+    --border-light: #eceae5;
+    
+    --navy-main: #132238;
+    --navy-hover: #0c1726;
+    --teal-accent: #0f766e;
+    --teal-subtle: #f0fdfa;
+    --teal-border: #99f6e4;
+
+    --success-bg: #f0fdf4;
+    --success-border: #bbf7d0;
+    --success-text: #166534;
+
+    --warning-bg: #fffbeb;
+    --warning-border: #fde68a;
+    --warning-text: #92400e;
+
+    --danger-bg: #fef2f2;
+    --danger-border: #fecaca;
+    --danger-text: #991b1b;
+
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  body {
+    background-color: var(--bg-base);
+    color: var(--text-main);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+    margin: 0;
+    padding: 0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  * {
+    border-color: var(--border-main);
+  }
+
+  ::selection {
+    background-color: var(--navy-main);
+    color: #ffffff;
+  }
+
+  /* Refined Focus States for Accessibility & Form Ergonomics */
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  button:focus-visible {
+    outline: 2px solid var(--teal-accent);
+    outline-offset: 2px;
+    transition: outline 0.15s ease, border-color 0.15s ease;
+  }
+}
+
+/* ==========================================================================
+   Tactical HUD Typography & Metric Classes
+   ========================================================================== */
+
+.font-hud-mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1;
+  letter-spacing: -0.02em;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.tracking-hud {
+  letter-spacing: 0.06em;
+}
+
+/* Smooth GPU-accelerated motion helpers */
+.motion-gpu {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* Shimmer pulse for data skeleton loading without flashy gradients */
+@keyframes hud-shimmer {
+  0% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0.55;
+  }
+}
+
+.animate-hud-shimmer {
+  animation: hud-shimmer 1.8s ease-in-out infinite;
+}
+
+/* Sleek minimalist scrollbar */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* ==========================================================================
+   Print Optimizations (for Document Checklists & Assessment Summaries)
+   ========================================================================== */
+@media print {
+  header,
+  footer,
+  nav,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  #main-content {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+}
+
+/* ==========================================================================
+   Reduced motion support
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
