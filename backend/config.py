@@ -32,7 +32,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_WINDOW_SECONDS: int = 60
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # In production (Render), env vars are injected directly — no .env file needed.
+        # In development, .env file is loaded.
+        env_file=".env" if os.getenv("ENVIRONMENT", "development") != "production" else None,
         env_file_encoding="utf-8",
         extra="ignore"
     )
@@ -40,6 +42,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT == "production"
 
 
 settings = Settings()

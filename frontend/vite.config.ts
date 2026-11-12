@@ -14,4 +14,9 @@ export default defineConfig({
       },
     },
   },
+  // Production: VITE_API_BASE_URL env var points to Render backend
+  // e.g. https://p21-backend.onrender.com
+  define: {
+    __API_BASE__: JSON.stringify(process.env.VITE_API_BASE_URL || ''),
+  },
 })

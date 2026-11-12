@@ -1,9 +1,13 @@
+// In production (Vercel), VITE_API_BASE_URL points to the Render backend.
+// In development/hosted mode it's empty so relative /api paths are used.
+const API_BASE = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? '';
+
 let csrfTokenCache: string | null = null;
 
 export async function getCsrfToken(): Promise<string> {
   if (csrfTokenCache) return csrfTokenCache;
   try {
-    const res = await fetch('/api/auth/csrf-token', { credentials: 'include' });
+    const res = await fetch(`${API_BASE}/api/auth/csrf-token`, { credentials: 'include' });
     if (res.ok) {
       const data = await res.json();
       csrfTokenCache = data.csrf_token;
@@ -41,7 +45,7 @@ export async function apiRequest<T = any>(
     }
   }
 
-  const response = await fetch(endpoint, {
+  const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
     headers,
     credentials: 'include',
