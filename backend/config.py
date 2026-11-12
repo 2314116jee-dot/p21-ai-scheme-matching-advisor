@@ -1,6 +1,21 @@
 import os
+import re
 from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _ensure_psycopg3_prefix(url: str) -> str:
+    """
+    Neon CLI writes standard postgresql:// / postgres:// URLs.
+    SQLAlchemy with psycopg3 requires postgresql+psycopg://.
+    This normalises the URL transparently for both local and cloud databases.
+    """
+    cleaned = url.strip().strip('"').strip("'")
+    return re.sub(r"^postgres(ql)?://", "postgresql+psycopg://", cleaned)
+
+
+def _is_local_db_url(url: str) -> bool:
+    return "@127.0.0.1" in url or "@localhost" in url
 
 
 class Settings(BaseSettings):
@@ -8,7 +23,18 @@ class Settings(BaseSettings):
     HOST: str = "127.0.0.1"
     PORT: int = 8000
 
+    # Pooled connection URL (Neon pooler or local postgres).
+    # Neon CLI writes postgresql:// — we normalise to postgresql+psycopg:// below.
     DATABASE_URL: str = "postgresql+psycopg://p21_user:p21_password@127.0.0.1:5432/p21"
+
+    # Unpooled / direct URL for Alembic migrations (DDL must bypass the pooler).
+    # Falls back to DATABASE_URL when not set (local dev without Neon).
+    DATABASE_URL_UNPOOLED: Optional[str] = None
+
+    # Neon branch metadata injected by `neon deploy` — informational, not required.
+    NEON_BRANCH: Optional[str] = None
+    NEON_BRANCH_ID: Optional[str] = None
+    NEON_FUNCTION_HOST_SUFFIX: Optional[str] = None
 
     SECRET_KEY: str = "497928f049558b6c0a8a520e5c6acb9decc3deb69412bfb463cd24fc1ecd5017"
     CSRF_SECRET: str = "0ff9cb393523615e47b92f3b291c644f83c01c379feebacf5fc101071de3f998"
@@ -46,6 +72,26 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"
+
+    def _validate_cloud_db_url(self, url: str) -> str:
+        normalized = _ensure_psycopg3_prefix(url)
+        if (self.is_production or os.getenv("RENDER") == "true") and _is_local_db_url(normalized):
+            raise RuntimeError(
+                "DATABASE_URL is not configured for cloud deployment (still pointing to 127.0.0.1/localhost). "
+                "Set DATABASE_URL in your Render service Environment Variables to your Neon PostgreSQL connection string."
+            )
+        return normalized
+
+    @property
+    def db_url(self) -> str:
+        """Pooled URL with psycopg3 driver prefix — used by the FastAPI app."""
+        return self._validate_cloud_db_url(self.DATABASE_URL)
+
+    @property
+    def db_url_unpooled(self) -> str:
+        """Direct (unpooled) URL for Alembic migrations — bypasses Neon pooler."""
+        raw = self.DATABASE_URL_UNPOOLED or self.DATABASE_URL
+        return self._validate_cloud_db_url(raw)
 
 
 settings = Settings()

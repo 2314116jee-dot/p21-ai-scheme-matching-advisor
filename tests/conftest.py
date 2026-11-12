@@ -12,7 +12,7 @@ from backend.services.auth_service import hash_password, get_or_create_role
 from backend.services.ingestion_service import seed_verified_schemes, seed_candidate_schemes
 
 # Use test connection or local DB session
-engine = create_engine(settings.DATABASE_URL)
+engine = create_engine(settings.db_url)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

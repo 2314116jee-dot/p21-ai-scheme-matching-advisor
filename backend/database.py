@@ -3,18 +3,18 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from typing import Generator
 from backend.config import settings
 
-# Neon.tech (and other cloud Postgres) requires SSL.
-# psycopg3 passes through ?sslmode=require from the connection string automatically.
-# For local dev, no SSL is needed — the connection string won't have sslmode.
+# settings.db_url normalises the Neon postgresql:// URL to postgresql+psycopg://
+# and falls back to the local DATABASE_URL in development.
+# settings.is_production adds sslmode=require for Neon (already in the URL) via connect_args.
 connect_args = {}
 if settings.is_production:
-    # Ensure SSL is enforced for cloud databases (Neon, Supabase, etc.)
+    # Neon injects ?sslmode=require in the URL itself; this is a belt-and-suspenders guard.
     connect_args = {"sslmode": "require"}
 
 engine = create_engine(
-    settings.DATABASE_URL,
+    settings.db_url,
     pool_pre_ping=True,
-    pool_size=5,       # Reduced for free tier limits (Neon: 10 max connections)
+    pool_size=5,       # Neon free tier: max 10 connections; leave headroom for migrations
     max_overflow=10,
     connect_args=connect_args,
 )

@@ -78,18 +78,22 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # Static file serving & SPA fallback for Hosted Mode (http://localhost:8000)
 frontend_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
+assets_dir = os.path.join(frontend_dist, "assets")
+if os.path.exists(assets_dir):
+    app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
-if os.path.exists(frontend_dist):
-    assets_dir = os.path.join(frontend_dist, "assets")
-    if os.path.exists(assets_dir):
-        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+@app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
+async def serve_spa(full_path: str):
+    # Do not intercept API or documentation routes
+    if (
+        full_path.startswith("api")
+        or full_path.startswith("docs")
+        or full_path.startswith("openapi.json")
+        or full_path.startswith("redoc")
+    ):
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
 
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
-        # Do not intercept API or documentation routes
-        if full_path.startswith("api") or full_path.startswith("docs") or full_path.startswith("openapi.json"):
-            return JSONResponse(status_code=404, content={"detail": "Not found"})
-
+    if os.path.exists(frontend_dist):
         file_path = os.path.join(frontend_dist, full_path)
         if os.path.isfile(file_path):
             return FileResponse(file_path)
@@ -98,4 +102,7 @@ if os.path.exists(frontend_dist):
         if os.path.exists(index_path):
             return FileResponse(index_path)
 
-        return JSONResponse(status_code=404, content={"detail": "Frontend bundle not found."})
+    return JSONResponse(
+        status_code=404,
+        content={"detail": "Frontend bundle not found. Please build frontend with 'npm run build'."}
+    )

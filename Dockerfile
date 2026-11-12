@@ -41,5 +41,5 @@ USER appuser
 
 EXPOSE 8000
 
-# Run migrations then start server
-CMD ["sh", "-c", "alembic upgrade head && uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 2"]
+# Run migrations then start server (honour Render's $PORT and default to 1 worker for free-tier RAM/DB limits)
+CMD ["sh", "-c", "alembic upgrade head && uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-1}"]

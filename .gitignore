@@ -39,3 +39,4 @@ backups/
 # Operating System
 .DS_Store
 Thumbs.db
+.neon
