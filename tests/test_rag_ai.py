@@ -65,3 +65,68 @@ def test_hybrid_retriever_ranking(db):
     # Top match should be CGTMSE or credit related
     top = schemes[0]
     assert "cgtmse" in top["code"].lower() or "credit" in top["name"].lower() or "guarantee" in top["name"].lower()
+
+
+def test_ai_chat_endpoint_basic():
+    resp = client.post(
+        "/api/ai/chat",
+        json={
+            "message": "What is PMEGP scheme?",
+            "history": [],
+            "top_k": 3
+        }
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "reply" in data
+    assert "answer_markdown" in data
+    assert len(data["reply"]) > 20
+    assert "matched_schemes" in data
+    assert "citations" in data
+    assert "provider_used" in data
+    assert "evidence_sufficiency" in data
+    assert "latency_ms" in data
+
+
+def test_ai_chat_endpoint_multiturn_history():
+    resp = client.post(
+        "/api/ai/chat",
+        json={
+            "message": "What is the subsidy percentage for women in rural areas?",
+            "history": [
+                {"role": "user", "content": "Tell me about PMEGP"},
+                {"role": "assistant", "content": "PMEGP is the Prime Minister Employment Generation Programme."}
+            ],
+            "top_k": 3
+        }
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "reply" in data
+    # Should identify PMEGP from previous context
+    matched_codes = [s["code"].lower() for s in data["matched_schemes"]]
+    assert any("pmegp" in c for c in matched_codes)
+
+
+def test_ai_suggested_prompts_endpoint():
+    resp = client.get("/api/ai/suggested-prompts")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "categories" in data
+    assert len(data["categories"]) >= 3
+    first_cat = data["categories"][0]
+    assert "category" in first_cat
+    assert "prompts" in first_cat
+    assert len(first_cat["prompts"]) > 0
+
+
+def test_deepseek_reasoning_extraction():
+    from backend.services.ai_service import extract_deepseek_thought_process
+    raw_text = "<think>\nAnalyzing PMEGP criteria for rural women.\nSubsidy is 35%.\n</think>\n\nUnder PMEGP, special category rural beneficiaries receive up to 35% margin money subsidy."
+    thought, answer = extract_deepseek_thought_process(raw_text)
+    assert thought is not None
+    assert "Analyzing PMEGP" in thought
+    assert "Under PMEGP" in answer
+    assert "<think>" not in answer
+    assert "</think>" not in answer
+

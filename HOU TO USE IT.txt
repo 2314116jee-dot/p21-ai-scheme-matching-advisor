@@ -1,1 +1,0 @@
-.\scripts\start-local.ps1 run it in cmd of the project folder

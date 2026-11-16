@@ -261,14 +261,17 @@ export interface SchemeMatchCitation {
 
 export interface SuggestedAction {
   label: string;
-  action_type: 'VIEW_SCHEME' | 'APPLY_FILTER' | 'UPDATE_PROFILE' | 'VISIT_PORTAL';
+  action_type: 'VIEW_SCHEME' | 'APPLY_FILTER' | 'UPDATE_PROFILE' | 'VISIT_PORTAL' | string;
   target_id?: number | null;
   url?: string | null;
+  target_url?: string | null;
 }
 
 export interface AIQueryResponse {
-  query: string;
+  query?: string;
+  answer?: string;
   answer_markdown: string;
+  thought_process?: string | null;
   matched_schemes: MatchedSchemeBrief[];
   citations: SchemeMatchCitation[];
   suggested_actions: SuggestedAction[];
@@ -285,6 +288,61 @@ export interface AIProviderStatusResponse {
   active_provider: string;
   model_name: string;
   deterministic_fallback_ready: boolean;
+  provider?: string;
+  is_available?: boolean;
+  details?: string;
+}
+
+export interface AIChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  thought_process?: string | null;
+  matched_schemes?: MatchedSchemeBrief[];
+  citations?: SchemeMatchCitation[];
+  suggested_actions?: SuggestedAction[];
+  provider_used?: string;
+  evidence_sufficiency?: 'SUFFICIENT' | 'PARTIAL' | 'INSUFFICIENT';
+  latency_ms?: number;
+  timestamp?: string;
+}
+
+export interface AIChatRequest {
+  message: string;
+  history?: Array<{ role: string; content: string }>;
+  scheme_id?: number | null;
+  verified_only?: boolean;
+  top_k?: number;
+}
+
+export interface AIChatResponse {
+  reply: string;
+  answer_markdown: string;
+  thought_process?: string | null;
+  matched_schemes: MatchedSchemeBrief[];
+  citations: SchemeMatchCitation[];
+  suggested_actions: SuggestedAction[];
+  provider_used: string;
+  evidence_sufficiency: 'SUFFICIENT' | 'PARTIAL' | 'INSUFFICIENT';
+  is_fallback: boolean;
+  retrieval_count: number;
+  latency_ms: number;
+  timestamp: string;
+}
+
+export interface PromptItem {
+  title: string;
+  query: string;
+}
+
+export interface PromptCategory {
+  category: string;
+  icon: string;
+  prompts: PromptItem[];
+}
+
+export interface SuggestedPromptsResponse {
+  categories: PromptCategory[];
 }
 
 export interface CatalogueCoverageStats {

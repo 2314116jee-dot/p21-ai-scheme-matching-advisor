@@ -4,8 +4,20 @@ from typing import Optional
 
 from backend.database import get_db
 from backend.models.user import User
-from backend.schemas.ai import AIQueryRequest, AIQueryResponse, AIProviderStatusResponse
-from backend.services.ai_service import query_rag_advisor, check_ai_provider_status
+from backend.schemas.ai import (
+    AIQueryRequest,
+    AIQueryResponse,
+    AIChatRequest,
+    AIChatResponse,
+    AIProviderStatusResponse,
+    SuggestedPromptsResponse,
+)
+from backend.services.ai_service import (
+    query_rag_advisor,
+    chat_rag_advisor,
+    check_ai_provider_status,
+    get_domain_suggested_prompts,
+)
 from backend.api.deps import get_current_user_optional
 
 router = APIRouter(prefix="/api/ai", tags=["AI Advisory & Natural Language Discovery"])
@@ -30,6 +42,33 @@ async def ask_scheme_advisor(
 
     response = await query_rag_advisor(db, payload, user=current_user)
     return response
+
+
+@router.post("/chat", response_model=AIChatResponse)
+async def chat_scheme_advisor(
+    payload: AIChatRequest,
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    """
+    Conversational chatbot endpoint for Indian entrepreneurs.
+    Accepts full message history, applies context-aware hybrid RAG retrieval,
+    and returns a source-grounded response with DeepSeek-R1 reasoning extraction.
+    """
+    if not payload.message or len(payload.message.strip()) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Message must contain at least 2 characters."
+        )
+
+    response = await chat_rag_advisor(db, payload, user=current_user)
+    return response
+
+
+@router.get("/suggested-prompts", response_model=SuggestedPromptsResponse)
+async def get_suggested_prompts():
+    """Returns curated starter prompts categorized by entrepreneur types."""
+    return get_domain_suggested_prompts()
 
 
 @router.get("/status", response_model=AIProviderStatusResponse)

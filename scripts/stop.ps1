@@ -6,32 +6,34 @@ param()
 
 $ErrorActionPreference = "Continue"
 
+# Ensure script runs with working directory at project root
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+Set-Location $ProjectRoot
+
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "  P21: Stopping Running Services" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
-if (Test-Path ".running-services.json") {
-    $info = Get-Content -Path ".running-services.json" -Raw | ConvertFrom-Json
+$runningFile = Join-Path $ProjectRoot ".running-services.json"
 
-    if ($info.BackendPid) {
-        try {
-            Stop-Process -Id $info.BackendPid -Force -ErrorAction SilentlyContinue
+if (Test-Path $runningFile) {
+    try {
+        $info = Get-Content -Path $runningFile -Raw | ConvertFrom-Json
+
+        if ($info.BackendPid) {
+            cmd.exe /c "taskkill /PID $($info.BackendPid) /T /F" 2>$null
             Write-Host "  [OK] Terminated backend process (PID $($info.BackendPid))." -ForegroundColor Green
-        } catch {
-            Write-Host "  [INFO] Backend process was not running." -ForegroundColor DarkGray
         }
-    }
 
-    if ($info.FrontendPid) {
-        try {
-            Stop-Process -Id $info.FrontendPid -Force -ErrorAction SilentlyContinue
+        if ($info.FrontendPid) {
+            cmd.exe /c "taskkill /PID $($info.FrontendPid) /T /F" 2>$null
             Write-Host "  [OK] Terminated frontend dev process (PID $($info.FrontendPid))." -ForegroundColor Green
-        } catch {
-            Write-Host "  [INFO] Frontend dev process was not running." -ForegroundColor DarkGray
         }
+    } catch {
+        Write-Host "  [INFO] Error reading process records: $_" -ForegroundColor DarkGray
     }
 
-    Remove-Item ".running-services.json" -Force -ErrorAction SilentlyContinue
+    Remove-Item $runningFile -Force -ErrorAction SilentlyContinue
 } else {
     Write-Host "  No .running-services.json record found. Checking active ports..." -ForegroundColor DarkGray
 }
@@ -42,7 +44,7 @@ foreach ($p in $ports) {
     $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue
     foreach ($c in $conns) {
         try {
-            Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
+            cmd.exe /c "taskkill /PID $($c.OwningProcess) /T /F" 2>$null
             Write-Host "  [OK] Released port $p (Process ID $($c.OwningProcess))." -ForegroundColor Green
         } catch {}
     }

@@ -1,10 +1,12 @@
 """
 P21 Modular AI Service Layer
-Provides multi-provider LLM orchestration (Local Ollama, Google Gemini API,
+Provides multi-provider LLM orchestration (Local Ollama with DeepSeek-R1, Google Gemini API,
 and Deterministic RAG Fallback) with structured outputs, prompt injection safeguards,
-and rigorous evidence citation binding.
+DeepSeek-R1 reasoning chain isolation (<think> tokens), and rigorous evidence citation binding.
 """
 
+import re
+import time
 import httpx
 import logging
 import datetime
@@ -19,10 +21,15 @@ from backend.schemas.assessment import ConditionResult
 from backend.schemas.ai import (
     AIQueryRequest,
     AIQueryResponse,
+    AIChatRequest,
+    AIChatResponse,
     MatchedSchemeBrief,
     SchemeMatchCitation,
     SuggestedAction,
     AIProviderStatusResponse,
+    SuggestedPromptsResponse,
+    PromptCategory,
+    PromptItem,
 )
 from backend.services.rag_service import (
     hybrid_retrieve_schemes,
@@ -32,6 +39,24 @@ from backend.services.rag_service import (
 )
 
 logger = logging.getLogger("p21.ai")
+
+
+def extract_deepseek_thought_process(text: str) -> Tuple[Optional[str], str]:
+    """
+    Extracts DeepSeek-R1 <think>...</think> reasoning tags.
+    Returns (thought_process, cleaned_content).
+    """
+    if not text:
+        return None, ""
+    match = re.search(r"<think>(.*?)</think>", text, flags=re.DOTALL)
+    if match:
+        thought = match.group(1).strip()
+        cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        return (thought if thought else None), cleaned
+    if "<think>" in text and "</think>" not in text:
+        parts = text.split("<think>", 1)
+        return parts[1].strip(), parts[0].strip()
+    return None, text.strip()
 
 
 def build_deterministic_explanation(
@@ -134,7 +159,7 @@ async def call_gemini_api(system_prompt: str, user_prompt: str) -> Optional[str]
 
 
 async def call_ollama_api(system_prompt: str, user_prompt: str) -> Optional[str]:
-    """Execute inference via local Ollama daemon."""
+    """Execute inference via local Ollama daemon /api/generate."""
     ollama_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/generate"
     combined_prompt = f"{system_prompt}\n\n{user_prompt}"
 
@@ -160,6 +185,64 @@ async def call_ollama_api(system_prompt: str, user_prompt: str) -> Optional[str]
     return None
 
 
+async def call_ollama_chat(
+    system_prompt: str,
+    user_prompt: str,
+    history: Optional[List[Dict[str, Any]]] = None
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Execute chat inference via local Ollama daemon using /api/chat.
+    Tuned for DeepSeek-R1:1.5b with automatic thought-process extraction.
+    Returns (cleaned_content, thought_process).
+    """
+    ollama_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/chat"
+
+    messages = [{"role": "system", "content": system_prompt}]
+    if history:
+        for msg in history[-6:]:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role in ("user", "assistant") and content and isinstance(content, str):
+                messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": user_prompt})
+
+    payload = {
+        "model": settings.OLLAMA_MODEL,
+        "messages": messages,
+        "stream": False,
+        "options": {
+            "temperature": 0.2,
+            "top_p": 0.9,
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.AI_TIMEOUT_SECONDS) as client:
+            resp = await client.post(ollama_url, json=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                msg = data.get("message", {})
+                raw_content = msg.get("content", "").strip()
+                thinking = msg.get("thinking")
+                if thinking:
+                    _, cleaned = extract_deepseek_thought_process(raw_content)
+                    return (cleaned or raw_content), thinking.strip()
+                thought, cleaned = extract_deepseek_thought_process(raw_content)
+                return (cleaned or raw_content), thought
+            else:
+                logger.warning(f"Ollama /api/chat returned status {resp.status_code}: {resp.text}")
+    except Exception as exc:
+        logger.info(f"Ollama /api/chat call failed ({exc}). Falling back to /api/generate...")
+
+    # Fallback to /api/generate
+    raw_gen = await call_ollama_api(system_prompt, user_prompt)
+    if raw_gen:
+        thought, cleaned = extract_deepseek_thought_process(raw_gen)
+        return (cleaned or raw_gen), thought
+
+    return None, None
+
+
 async def query_rag_advisor(
     db: Session,
     request: AIQueryRequest,
@@ -169,6 +252,7 @@ async def query_rag_advisor(
     Execute natural-language scheme discovery using hybrid retrieval and grounded LLM synthesis.
     Falls back gracefully to deterministic synthesis if AI providers are unreachable.
     """
+    start_time = time.perf_counter()
     profile = db.query(UserProfile).filter(UserProfile.user_id == user.id).first() if user else None
 
     # Step 1: Hybrid retrieval
@@ -177,7 +261,9 @@ async def query_rag_advisor(
         query=request.query,
         profile=profile,
         verified_only=request.verified_only,
-        limit=5
+        limit=request.top_k or 5,
+        scheme_id=request.scheme_id,
+        history=request.history,
     )
 
     matched_briefs: List[MatchedSchemeBrief] = [
@@ -202,15 +288,30 @@ async def query_rag_advisor(
         profile=profile
     )
 
+    # Evaluate evidence sufficiency
+    top_score = retrieved_schemes[0]["relevance_score"] if retrieved_schemes else 0.0
+    if top_score >= 35.0 and len(citations) > 0:
+        evidence_sufficiency = "SUFFICIENT"
+    elif top_score >= 15.0 or len(retrieved_schemes) > 0:
+        evidence_sufficiency = "PARTIAL"
+    else:
+        evidence_sufficiency = "INSUFFICIENT"
+
     if not settings.AI_ENABLED or settings.AI_PROVIDER == "deterministic":
+        latency_ms = (time.perf_counter() - start_time) * 1000
         return AIQueryResponse(
+            query=request.query,
             answer=deterministic_answer,
+            thought_process=None,
             matched_schemes=matched_briefs,
             citations=citations,
             suggested_actions=default_actions,
             provider_used="deterministic_rules_engine",
             confidence_score=0.95 if retrieved_schemes else 0.5,
+            evidence_sufficiency=evidence_sufficiency,
             is_fallback=True,
+            retrieval_count=len(retrieved_schemes),
+            latency_ms=round(latency_ms, 1),
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
 
@@ -219,6 +320,7 @@ async def query_rag_advisor(
     user_prompt = build_rag_user_prompt(request.query, retrieved_schemes, profile)
 
     llm_output = None
+    thought_process = None
     provider_name = settings.AI_PROVIDER
 
     # Step 3: Dispatch to configured provider
@@ -226,32 +328,78 @@ async def query_rag_advisor(
         llm_output = await call_gemini_api(system_prompt, user_prompt)
         provider_name = f"google_gemini_{settings.GEMINI_MODEL}"
     elif settings.AI_PROVIDER == "ollama":
-        llm_output = await call_ollama_api(system_prompt, user_prompt)
+        llm_output, thought_process = await call_ollama_chat(system_prompt, user_prompt, request.history)
         provider_name = f"ollama_{settings.OLLAMA_MODEL}"
+
+    latency_ms = (time.perf_counter() - start_time) * 1000
 
     # Step 4: Fallback if LLM failed
     if not llm_output:
         logger.info(f"AI provider {settings.AI_PROVIDER} unavailable. Serving grounded deterministic synthesis.")
         return AIQueryResponse(
+            query=request.query,
             answer=deterministic_answer,
+            thought_process=None,
             matched_schemes=matched_briefs,
             citations=citations,
             suggested_actions=default_actions,
             provider_used="deterministic_fallback (provider unavailable)",
             confidence_score=0.90 if retrieved_schemes else 0.4,
+            evidence_sufficiency=evidence_sufficiency,
             is_fallback=True,
+            retrieval_count=len(retrieved_schemes),
+            latency_ms=round(latency_ms, 1),
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
 
     return AIQueryResponse(
+        query=request.query,
         answer=llm_output,
+        thought_process=thought_process,
         matched_schemes=matched_briefs,
         citations=citations,
         suggested_actions=default_actions,
         provider_used=provider_name,
         confidence_score=0.98 if retrieved_schemes else 0.6,
+        evidence_sufficiency=evidence_sufficiency,
         is_fallback=False,
+        retrieval_count=len(retrieved_schemes),
+        latency_ms=round(latency_ms, 1),
         timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+
+
+async def chat_rag_advisor(
+    db: Session,
+    request: AIChatRequest,
+    user: Optional[User] = None
+) -> AIChatResponse:
+    """
+    Conversational chatbot endpoint for Indian entrepreneurs.
+    Accepts conversation history, executes hybrid RAG retrieval, and generates
+    grounded responses using DeepSeek-R1 (Ollama) or deterministic fallback.
+    """
+    query_req = AIQueryRequest(
+        query=request.message,
+        top_k=request.top_k,
+        verified_only=request.verified_only,
+        scheme_id=request.scheme_id,
+        history=[m.model_dump() for m in request.history],
+    )
+    res = await query_rag_advisor(db, query_req, user=user)
+
+    return AIChatResponse(
+        reply=res.answer,
+        thought_process=res.thought_process,
+        matched_schemes=res.matched_schemes,
+        citations=res.citations,
+        suggested_actions=res.suggested_actions,
+        provider_used=res.provider_used,
+        evidence_sufficiency=res.evidence_sufficiency,
+        is_fallback=res.is_fallback,
+        retrieval_count=res.retrieval_count,
+        latency_ms=res.latency_ms,
+        timestamp=res.timestamp,
     )
 
 
@@ -323,7 +471,8 @@ Official Grounding Sources:
         llm_output = await call_gemini_api(system_prompt, user_prompt)
         provider_name = f"google_gemini_{settings.GEMINI_MODEL}"
     elif settings.AI_PROVIDER == "ollama":
-        llm_output = await call_ollama_api(system_prompt, user_prompt)
+        cleaned, _ = await call_ollama_chat(system_prompt, user_prompt)
+        llm_output = cleaned
         provider_name = f"ollama_{settings.OLLAMA_MODEL}"
 
     if llm_output:
@@ -333,57 +482,176 @@ Official Grounding Sources:
 
 
 async def check_ai_provider_status() -> AIProviderStatusResponse:
-    """Check health and live availability of configured AI provider."""
+    """Check health and live availability of configured AI provider and local Ollama models."""
     provider = settings.AI_PROVIDER
+
+    ollama_ok = False
+    gemini_ok = False
+    model_found = False
+
+    # Check Ollama daemon
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/tags")
+            if r.status_code == 200:
+                ollama_ok = True
+                models_data = r.json().get("models", [])
+                model_names = [m.get("name", "") for m in models_data]
+                model_found = any(settings.OLLAMA_MODEL in name for name in model_names)
+    except Exception:
+        ollama_ok = False
+
+    # Check Gemini if configured
+    if settings.GEMINI_API_KEY:
+        try:
+            res = await call_gemini_api("You are a health checker. Reply 'P21_OK'.", "Ping")
+            gemini_ok = bool(res and "P21_OK" in res)
+        except Exception:
+            gemini_ok = False
 
     if not settings.AI_ENABLED:
         return AIProviderStatusResponse(
             provider="disabled",
+            default_provider="disabled",
+            active_provider="disabled",
             is_available=False,
+            ollama_available=ollama_ok,
+            gemini_available=gemini_ok,
+            deterministic_fallback_ready=True,
             model_name="none",
             details="AI capabilities have been explicitly disabled in server configuration."
         )
 
-    if provider == "gemini":
-        if not settings.GEMINI_API_KEY:
-            return AIProviderStatusResponse(
-                provider="gemini",
-                is_available=False,
-                model_name=settings.GEMINI_MODEL,
-                details="Gemini API Key is not configured. Falling back to deterministic RAG engine."
-            )
-        # Test Gemini endpoint
-        res = await call_gemini_api("You are a health checker. Reply 'P21_OK'.", "Ping")
-        is_ok = bool(res and "P21_OK" in res)
-        return AIProviderStatusResponse(
-            provider="gemini",
-            is_available=is_ok,
-            model_name=settings.GEMINI_MODEL,
-            details="Google Gemini API is online and responding." if is_ok else "Gemini API reachable check timed out; falling back to deterministic RAG."
-        )
-
     if provider == "ollama":
-        try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                r = await client.get(f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/tags")
-                is_ok = r.status_code == 200
-                return AIProviderStatusResponse(
-                    provider="ollama",
-                    is_available=is_ok,
-                    model_name=settings.OLLAMA_MODEL,
-                    details="Local Ollama daemon is active." if is_ok else "Ollama service unavailable on localhost:11434; deterministic fallback active."
-                )
-        except Exception:
+        if ollama_ok:
+            details_str = (
+                f"Local Ollama is active with '{settings.OLLAMA_MODEL}' loaded."
+                if model_found
+                else f"Local Ollama daemon is active. Model '{settings.OLLAMA_MODEL}' not found in registry (available models will be queried)."
+            )
             return AIProviderStatusResponse(
                 provider="ollama",
-                is_available=False,
+                default_provider="ollama",
+                active_provider="ollama",
+                is_available=True,
+                ollama_available=True,
+                gemini_available=gemini_ok,
+                deterministic_fallback_ready=True,
                 model_name=settings.OLLAMA_MODEL,
-                details="Ollama service is not running on localhost:11434. Deterministic RAG active."
+                details=details_str
             )
+        else:
+            return AIProviderStatusResponse(
+                provider="ollama",
+                default_provider="ollama",
+                active_provider="deterministic",
+                is_available=False,
+                ollama_available=False,
+                gemini_available=gemini_ok,
+                deterministic_fallback_ready=True,
+                model_name=settings.OLLAMA_MODEL,
+                details=f"Ollama service unavailable on {settings.OLLAMA_BASE_URL}. Deterministic RAG fallback active."
+            )
+
+    if provider == "gemini":
+        return AIProviderStatusResponse(
+            provider="gemini",
+            default_provider="gemini",
+            active_provider="gemini" if gemini_ok else "deterministic",
+            is_available=gemini_ok,
+            ollama_available=ollama_ok,
+            gemini_available=gemini_ok,
+            deterministic_fallback_ready=True,
+            model_name=settings.GEMINI_MODEL,
+            details="Google Gemini API is online and responding." if gemini_ok else "Gemini API key missing or check timed out; deterministic fallback active."
+        )
 
     return AIProviderStatusResponse(
         provider="deterministic",
+        default_provider="deterministic",
+        active_provider="deterministic",
         is_available=True,
+        ollama_available=ollama_ok,
+        gemini_available=gemini_ok,
+        deterministic_fallback_ready=True,
         model_name="deterministic_rules_engine",
         details="Deterministic rule-grounded RAG engine active (Zero external API dependencies)."
+    )
+
+
+def get_domain_suggested_prompts() -> SuggestedPromptsResponse:
+    """Pre-curated starter questions tailored for Indian entrepreneur profiles."""
+    return SuggestedPromptsResponse(
+        categories=[
+            PromptCategory(
+                category="Women Entrepreneurs",
+                icon="Heart",
+                prompts=[
+                    PromptItem(
+                        title="Special Subsidies for Women",
+                        query="What special subsidies or margin money concessions are available for women entrepreneurs under PMEGP and Stand-Up India?"
+                    ),
+                    PromptItem(
+                        title="Collateral-Free Credit",
+                        query="How can a female-founded enterprise obtain collateral-free loans up to ₹1 Crore?"
+                    ),
+                ]
+            ),
+            PromptCategory(
+                category="Manufacturing & MSME",
+                icon="Factory",
+                prompts=[
+                    PromptItem(
+                        title="PMEGP ₹50 Lakh Grant",
+                        query="What are the eligibility criteria and education requirements to set up a ₹50 Lakh manufacturing unit under PMEGP?"
+                    ),
+                    PromptItem(
+                        title="CGTMSE Guarantee",
+                        query="What is CGTMSE coverage and how does it protect lenders against defaults for micro enterprises?"
+                    ),
+                ]
+            ),
+            PromptCategory(
+                category="Startups & Innovation",
+                icon="Rocket",
+                prompts=[
+                    PromptItem(
+                        title="Startup India Seed Fund",
+                        query="Which central schemes provide grants for proof-of-concept, prototyping, and early-stage startup commercialization?"
+                    ),
+                    PromptItem(
+                        title="DPIIT Recognition Benefits",
+                        query="What exemptions and funding assistance does DPIIT startup recognition unlock?"
+                    ),
+                ]
+            ),
+            PromptCategory(
+                category="Artisans & Traditional Trades",
+                icon="Hammer",
+                prompts=[
+                    PromptItem(
+                        title="PM Vishwakarma Benefits",
+                        query="What toolkit incentives, collateral-free loans at 5% interest, and stipends does PM Vishwakarma provide for traditional artisans?"
+                    ),
+                    PromptItem(
+                        title="Khadi & Village Industries",
+                        query="What assistance exists for village industries and rural agro-processing units?"
+                    ),
+                ]
+            ),
+            PromptCategory(
+                category="Small Loans (Mudra)",
+                icon="Banknote",
+                prompts=[
+                    PromptItem(
+                        title="Mudra Shishu, Kishore & Tarun",
+                        query="What are the loan limits for Shishu, Kishore, and Tarun categories under Pradhan Mantri Mudra Yojana?"
+                    ),
+                    PromptItem(
+                        title="Application Checklist",
+                        query="What documents do I need to prepare before applying for a Mudra loan at a public sector bank?"
+                    ),
+                ]
+            ),
+        ]
     )

@@ -11,7 +11,7 @@ The platform combines a **two-tier matching engine** (strict deterministic rule 
 1. **Dual Authentication Portals**: Separate portals for Citizen Entrepreneurs and Government Administrators with strict backend role enforcement, rate limiting, and HTTP-only cookie sessions.
 2. **Comprehensive Entrepreneur Profiles**: Captures applicant type, business stage, sector, turnover, investment, beneficiary categories, district/state, and Udyam registration status.
 3. **Data Pipeline & 111 Ingested Schemes**: Automated ingestion pipeline processing the Hugging Face `shrijayan/gov_myscheme` dataset with zero-width whitespace normalization, duplicate detection, and Central vs. State classification. Currently persists 111 Central schemes, 115 cited sources, 120 rules, and 307 catalogued documents.
-4. **Real AI Layer & Hybrid RAG**: Conversational discovery engine combining lexical keyword expansion, sector affinity, and verification ranking with prompt injection defenses (`<<<START_RETRIEVED_DOCUMENT>>>`). Supports Google Gemini 2.5 Flash, local Ollama, and a 100% deterministic grounded fallback engine.
+4. **Real AI Layer & Hybrid RAG (DeepSeek-R1 1.5B in Ollama)**: Conversational discovery engine combining lexical keyword expansion, sector affinity, and verification ranking with prompt injection defenses (`<<<START_RETRIEVED_DOCUMENT>>>`). Integrates local **DeepSeek-R1 (1.5B)** via Ollama with internal `<think>` reasoning chain extraction, persistent floating Chatbot widget, custom `Modelfile` grounding, Google Gemini, and a 100% deterministic grounded fallback engine.
 5. **Multi-Factor Recommendation Engine**: Transparent, explainable scoring ($w_e \times 50\% + w_p \times 25\% + w_v \times 15\% + w_{ev} \times 10\%$) with hard disqualification caps and four human-readable match categories.
 6. **Eligibility Gap Analysis & Roadmaps**: Dedicated gap analysis breakdown (`/schemes/:id/gap-analysis`) displaying missing profile fields with "why it matters" rationales, disqualification explanations, and actionable next steps.
 7. **Interactive Entrepreneur Tools**: Scheme search, side-by-side comparison matrix with dynamic scheme addition, document checklist tracker with printable exports, and bookmarking.
@@ -146,7 +146,17 @@ Securely provisions a system administrator account. Supports interactive prompts
 .\scripts\create-admin.ps1 -Email "admin@p21.gov.in" -Password "AdminDemonstration2026!" -FullName "System Administrator"
 ```
 
-### 5. Running the Application
+### 5. Local Ollama & DeepSeek-R1 (1.5B) Prototype Training
+Verifies Ollama connectivity, checks base `deepseek-r1:1.5b`, compiles the custom `p21-advisor` model using `Modelfile`, and executes benchmark inference:
+```powershell
+.\scripts\train-ollama-model.ps1
+```
+Or execute via python directly:
+```powershell
+.\venv\Scripts\python scripts/train_ollama_model.py
+```
+
+### 6. Running the Application
 
 #### Mode A: Hosted Mode (Single-Process, Production Simulation)
 Compiles the React frontend bundle into `frontend\dist` and runs FastAPI on port 8000 serving both API routes and static frontend assets:
@@ -181,12 +191,12 @@ Run the test suite:
 .\venv\Scripts\python -m pytest -v
 ```
 
-### Test Coverage Summary (34 Tests, 100% Pass Rate):
+### Test Coverage Summary (39 Tests, 100% Pass Rate):
 - **`test_auth.py`**: User registration, password hashing (bcrypt), login rate limiting, session cookies, and single-use reset tokens.
 - **`test_authorization.py`**: Role enforcement, blocking standard users from admin APIs, and admin bootstrapping.
 - **`test_eligibility_engine.py`**: Evaluation of structured conditions against PMEGP, Stand-Up India, and Mudra criteria; handling of missing data (`UNKNOWN`) and disqualifications (`FAIL`).
 - **`test_ai_layer.py`**: Deterministic fallback text generation and source attribution when LLMs are offline.
-- **`test_rag_ai.py`**: Provider health check, hybrid retrieval ranking, general and specific natural language discovery, and prompt injection delimiter fencing.
+- **`test_rag_ai.py`**: Provider health check, hybrid retrieval ranking, general and specific natural language discovery, multi-turn conversational chat, suggested prompt categories, prompt injection delimiter fencing, and DeepSeek-R1 `<think>` reasoning extraction.
 - **`test_recommendation_engine.py`**: Multi-factor scoring calculation, hard requirement disqualification capping ($\le 25\%$), and eligibility gap analysis generation.
 - **`test_profile.py`**: Validation and persistence of entrepreneur attributes.
 - **`test_schemes.py`**: Filtering schemes by verification status and category.
@@ -195,5 +205,5 @@ Run the test suite:
 - **`test_system.py`**: Health check and database roundtrip verification.
 - **`scripts/test_batch_ingest.py` & `scripts/test_multiple_samples.py`**: PDF text extraction, zero-width normalization, and candidate ingestion.
 
-**Status**: 34 passed in 18.25 seconds (100% pass rate).
+**Status**: 39 passed in ~24s (100% pass rate).
 

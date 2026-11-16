@@ -8,6 +8,7 @@ import { Footer } from './components/layout/Footer';
 import { SkipToContent } from './components/ui/SkipToContent';
 import { CommandPalette } from './components/ui/CommandPalette';
 import { ScrollToTop } from './components/ui/ScrollToTop';
+import { ChatbotWidget } from './components/chat/ChatbotWidget';
 
 // Pages
 import { LandingPage } from './pages/LandingPage';
@@ -209,6 +210,7 @@ export const App: React.FC = () => {
             <Footer />
             <CommandPalette />
             <ScrollToTop />
+            <ChatbotWidget />
           </div>
         </BrowserRouter>
       </ToastProvider>

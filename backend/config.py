@@ -48,10 +48,10 @@ class Settings(BaseSettings):
 
     AI_PROVIDER: str = "ollama"  # "ollama", "gemini", or "deterministic"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "llama3.2"
+    OLLAMA_MODEL: str = "deepseek-r1:1.5b"
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-2.0-flash"
-    AI_TIMEOUT_SECONDS: int = 20
+    AI_TIMEOUT_SECONDS: int = 60
     AI_ENABLED: bool = True
 
     RATE_LIMIT_LOGIN_MAX: int = 5
