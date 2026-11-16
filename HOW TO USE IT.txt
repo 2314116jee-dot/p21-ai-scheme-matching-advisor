@@ -2,14 +2,16 @@
 How to Run P21 (AI Scheme-Matching Advisor) Locally
 ==========================================================
 
-1. Ollama DeepSeek-R1 (1.5B) Prototype AI Setup
+1. AI Provider Setup (Google Gemini & Ollama)
 -----------------------------------------------
-The AI Chatbot uses local Ollama with model: deepseek-r1:1.5b.
-Ensure Ollama is running (`ollama serve`).
+The application is configured to use Google Gemini Cloud AI by default:
+- Provider: Google Gemini (gemini-2.5-flash)
+- No local GPU or Ollama installation required!
+- Your Gemini API Key and Project (681553723879) are active in .env.
 
-To build/verify the tuned P21 Advisor model in Ollama:
-  scripts\train-ollama-model.bat
-(or PowerShell: .\scripts\train-ollama-model.ps1)
+Optional: To switch to local Ollama with DeepSeek-R1 (1.5B):
+  Set AI_PROVIDER=ollama in .env, start `ollama serve`, and run:
+  scripts\train-ollama-model.bat (or .\scripts\train-ollama-model.ps1)
 
 2. Running the Application
 --------------------------

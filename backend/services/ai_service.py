@@ -109,8 +109,12 @@ def build_deterministic_explanation(
     return "\n".join(lines)
 
 
-async def call_gemini_api(system_prompt: str, user_prompt: str) -> Optional[str]:
-    """Execute inference via Google Gemini REST API."""
+async def call_gemini_api(
+    system_prompt: str,
+    user_prompt: str,
+    history: Optional[List[Dict[str, Any]]] = None
+) -> Optional[str]:
+    """Execute inference via Google Gemini REST API with optional multi-turn conversation support."""
     if not settings.GEMINI_API_KEY:
         return None
 
@@ -119,15 +123,27 @@ async def call_gemini_api(system_prompt: str, user_prompt: str) -> Optional[str]
         f"{settings.GEMINI_MODEL}:generateContent?key={settings.GEMINI_API_KEY}"
     )
 
+    contents: List[Dict[str, Any]] = []
+    if history:
+        for msg in history[-6:]:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role in ("user", "assistant") and content and isinstance(content, str):
+                gemini_role = "user" if role == "user" else "model"
+                if not contents and gemini_role == "model":
+                    continue
+                if contents and contents[-1]["role"] == gemini_role:
+                    contents[-1]["parts"][0]["text"] += f"\n{content}"
+                else:
+                    contents.append({"role": gemini_role, "parts": [{"text": content}]})
+
+    if contents and contents[-1]["role"] == "user":
+        contents[-1]["parts"][0]["text"] += f"\n\n{user_prompt}"
+    else:
+        contents.append({"role": "user", "parts": [{"text": user_prompt}]})
+
     payload = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {"text": user_prompt}
-                ]
-            }
-        ],
+        "contents": contents,
         "systemInstruction": {
             "parts": [
                 {"text": system_prompt}
@@ -150,6 +166,22 @@ async def call_gemini_api(system_prompt: str, user_prompt: str) -> Optional[str]
                     parts = candidates[0].get("content", {}).get("parts", [])
                     if parts:
                         return parts[0].get("text", "").strip()
+            elif resp.status_code == 429 and settings.GEMINI_MODEL != "gemini-2.5-flash-lite":
+                logger.warning("Primary Gemini model quota rate-limited (429). Falling back to gemini-2.5-flash-lite...")
+                fallback_url = (
+                    f"https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"gemini-2.5-flash-lite:generateContent?key={settings.GEMINI_API_KEY}"
+                )
+                resp2 = await client.post(fallback_url, json=payload)
+                if resp2.status_code == 200:
+                    data2 = resp2.json()
+                    candidates = data2.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            return parts[0].get("text", "").strip()
+                else:
+                    logger.warning(f"Fallback Gemini model returned status {resp2.status_code}: {resp2.text}")
             else:
                 logger.warning(f"Gemini API returned status {resp.status_code}: {resp.text}")
     except Exception as exc:
@@ -325,7 +357,7 @@ async def query_rag_advisor(
 
     # Step 3: Dispatch to configured provider
     if settings.AI_PROVIDER == "gemini":
-        llm_output = await call_gemini_api(system_prompt, user_prompt)
+        llm_output = await call_gemini_api(system_prompt, user_prompt, request.history)
         provider_name = f"google_gemini_{settings.GEMINI_MODEL}"
     elif settings.AI_PROVIDER == "ollama":
         llm_output, thought_process = await call_ollama_chat(system_prompt, user_prompt, request.history)
@@ -489,9 +521,20 @@ async def check_ai_provider_status() -> AIProviderStatusResponse:
     gemini_ok = False
     model_found = False
 
-    # Check Ollama daemon
+    # Check Gemini if configured (lightweight metadata check that does not consume generation quota)
+    if settings.GEMINI_API_KEY:
+        try:
+            check_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={settings.GEMINI_API_KEY}"
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(check_url)
+                gemini_ok = (r.status_code == 200)
+        except Exception:
+            gemini_ok = False
+
+    # Check Ollama daemon (fast probe if Gemini is already the active provider)
+    ollama_timeout = 3.0 if provider == "ollama" else 0.8
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=ollama_timeout) as client:
             r = await client.get(f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/tags")
             if r.status_code == 200:
                 ollama_ok = True
@@ -500,14 +543,6 @@ async def check_ai_provider_status() -> AIProviderStatusResponse:
                 model_found = any(settings.OLLAMA_MODEL in name for name in model_names)
     except Exception:
         ollama_ok = False
-
-    # Check Gemini if configured
-    if settings.GEMINI_API_KEY:
-        try:
-            res = await call_gemini_api("You are a health checker. Reply 'P21_OK'.", "Ping")
-            gemini_ok = bool(res and "P21_OK" in res)
-        except Exception:
-            gemini_ok = False
 
     if not settings.AI_ENABLED:
         return AIProviderStatusResponse(

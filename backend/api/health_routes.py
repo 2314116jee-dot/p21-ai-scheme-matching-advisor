@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-import httpx
 
 from backend.database import get_db
 from backend.config import settings
+from backend.services.ai_service import check_ai_provider_status
 
 router = APIRouter(tags=["Health & Status"])
 
@@ -16,18 +16,11 @@ async def health_check(db: Session = Depends(get_db)):
     try:
         db.execute(text("SELECT 1"))
         db_ok = True
-    except Exception as e:
+    except Exception:
         db_ok = False
 
-    # 2. Check Ollama
-    ollama_ok = False
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            resp = await client.get(f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/tags")
-            if resp.status_code == 200:
-                ollama_ok = True
-    except Exception:
-        ollama_ok = False
+    # 2. Check AI Provider Status
+    ai_status = await check_ai_provider_status()
 
     return {
         "status": "healthy" if db_ok else "unhealthy",
@@ -38,9 +31,9 @@ async def health_check(db: Session = Depends(get_db)):
             "engine": "PostgreSQL 17"
         },
         "ai_service": {
-            "provider": settings.AI_PROVIDER,
-            "model": settings.OLLAMA_MODEL,
-            "connected": ollama_ok,
-            "notice": "Online" if ollama_ok else "Deterministic fallback active (Ollama not running)"
+            "provider": ai_status.active_provider,
+            "model": ai_status.model_name,
+            "connected": ai_status.is_available,
+            "notice": ai_status.details
         }
     }

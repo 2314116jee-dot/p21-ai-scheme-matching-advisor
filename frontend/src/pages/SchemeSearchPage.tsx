@@ -32,6 +32,7 @@ export const SchemeSearchPage: React.FC = () => {
       if (searchQuery.trim()) params.append('q', searchQuery.trim());
       if (selectedMinistry) params.append('ministry', selectedMinistry);
       if (selectedStatus) params.append('status', selectedStatus);
+      params.append('limit', '150');
 
       const data = await apiRequest<Scheme[]>(`/api/schemes?${params.toString()}`);
       setSchemes(data);
